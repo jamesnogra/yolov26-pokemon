@@ -5,58 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>YOLOv26 Pokemon INT8 Inference</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
-    <style>
-        body { 
-            font-family: sans-serif; 
-            display: flex; 
-            flex-direction: column; 
-            align-items: center; 
-            background-color: #f4f4f9;
-            margin: 0;
-            padding: 20px;
-        }
-        .video-container { 
-            position: relative; 
-            width: 640px; 
-            height: 480px; 
-            background: #000; 
-            border-radius: 8px;
-            overflow: hidden;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        }
-        video { display: none; } 
-        canvas { 
-            position: absolute; 
-            top: 0; 
-            left: 0; 
-            width: 100%; 
-            height: 100%; 
-        }
-        #hud {
-            font-family: monospace;
-            padding: 15px;
-            background: #282c34;
-            color: #61dafb;
-            border-radius: 6px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-            margin-bottom: 15px;
-            text-align: center;
-            width: 610px;
-        }
-        .hud-text { margin-top: 5px; font-size: 14px; }
-    </style>
+    
 </head>
 <body>
     <h1>Pokemon Real-time Detect</h1>
-
-    <div id="hud" style="display: none;">
-        <div id="status">Loading model...</div>
-        <div id="diagnostics" class="hud-text" style="color: #98c379;">Awaiting inference...</div>
-        <div id="box-diagnostics" class="hud-text" style="color: #ffeb3b; font-weight: bold;">Raw Box 1: None</div>
-    </div>
     
     <div class="video-container">
-        <video id="webcam" autoplay playsinline muted></video>
+        <video id="webcam" style="display: none;" autoplay playsinline muted></video>
         <canvas id="output-canvas"></canvas>
     </div>
 
@@ -70,19 +25,13 @@
         const canvas = document.getElementById('output-canvas');
         const ctx = canvas.getContext('2d');
         
-        const statusText = document.getElementById('status');
-        const diagText = document.getElementById('diagnostics');
-        const boxDiagText = document.getElementById('box-diagnostics');
-        
         let model;
         let activeBoxes = []; // Will store the latest predictions to share with the render loop
 
         async function init() {
             try {
                 model = await tf.loadGraphModel('./int8/model.json');
-                statusText.innerText = "Requesting webcam permissions...";
                 await setupCamera();
-                statusText.innerText = "Model loaded. Running inference...";
                 video.play();
                 
                 // Start both loops concurrently
@@ -91,7 +40,6 @@
                 
             } catch (error) {
                 console.error(error);
-                statusText.innerText = "Error: " + error.message;
             }
         }
 
@@ -110,7 +58,7 @@
             });
         }
 
-        // --- LOOP 1: RENDER VIDEO & BOXES ---
+        // --- RENDER VIDEO & BOXES ---
         // Runs as fast as the browser allows (smooth video stream)
         function renderLoop() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -154,8 +102,8 @@
             requestAnimationFrame(renderLoop);
         }
 
-        // --- LOOP 2: THROTTLED INFERENCE ---
-        // Executes, updates boxes, and then waits 500ms before doing it again
+        // --- THROTTLED INFERENCE ---
+        // Executes, updates boxes, and then waits 250ms before doing it again
         async function inferenceLoop() {
             let inputTensor, predictions;
 
@@ -224,17 +172,6 @@
                     }
                 }
 
-                const end = performance.now();
-                diagText.innerText = `Shape: [${shape.join(', ')}] | Format: ${parsedFormat} | Exec Time: ${(end - start).toFixed(1)}ms`;
-                statusText.innerText = `Boxes Rendered: ${boxes.length}`;
-
-                if (boxes.length > 0) {
-                    let b = boxes[0];
-                    boxDiagText.innerText = `Raw Box 1: x1: ${b.x1.toFixed(2)}, y1: ${b.y1.toFixed(2)}, x2: ${b.x2.toFixed(2)}, y2: ${b.y2.toFixed(2)}`;
-                } else {
-                    boxDiagText.innerText = "Raw Box 1: None";
-                }
-
                 // Push new predictions to shared array
                 activeBoxes = boxes;
 
@@ -246,7 +183,7 @@
                 if (predictions) predictions.dispose();
             }
 
-            // WAIT at least 500ms before doing the next frame inference 
+            // WAIT at least 250ms before doing the next frame inference 
             // (saving CPU/GPU, but keeping the renderLoop completely buttery smooth)
             setTimeout(inferenceLoop, 250);
         }
