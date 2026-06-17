@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YOLOv26 Pokemon INT8 Inference</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
+    <style>
+        body { 
+            font-family: sans-serif; 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            background-color: #f4f4f9;
+            margin: 0;
+            padding: 20px;
+        }
+        .video-container { 
+            position: relative; 
+            width: 640px; 
+            height: 480px; 
+            background: #000; 
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        video { display: none; } 
+        canvas { 
+            position: absolute; 
+            top: 0; 
+            left: 0; 
+            width: 100%; 
+            height: 100%; 
+        }
+        #hud {
+            font-family: monospace;
+            padding: 15px;
+            background: #282c34;
+            color: #61dafb;
+            border-radius: 6px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            margin-bottom: 15px;
+            text-align: center;
+            width: 610px;
+        }
+        .hud-text { margin-top: 5px; font-size: 14px; }
+    </style>
+</head>
+<body>
+    <h1>Pokemon Real-time Detect</h1>
+
+    <div id="hud" style="display: none;">
+        <div id="status">Loading model...</div>
+        <div id="diagnostics" class="hud-text" style="color: #98c379;">Awaiting inference...</div>
+        <div id="box-diagnostics" class="hud-text" style="color: #ffeb3b; font-weight: bold;">Raw Box 1: None</div>
+    </div>
+    
+    <div class="video-container">
+        <video id="webcam" autoplay playsinline muted></video>
+        <canvas id="output-canvas"></canvas>
+    </div>
+
+    <script>
+        const MODEL_DIM = 736; 
+        const CONFIDENCE_THRESHOLD = 0.25; 
+        const CLASSES = ["bulbasaur", "charmander", "pikachu", "squirtle"];
+        const COLORS = ["#4CAF50", "#FF5722", "#FFEB3B", "#03A9F4"];
+
+        const video = document.getElementById('webcam');
+        const canvas = document.getElementById('output-canvas');
+        const ctx = canvas.getContext('2d');
+        
+        const statusText = document.getElementById('status');
+        const diagText = document.getElementById('diagnostics');
+        const boxDiagText = document.getElementById('box-diagnostics');
+        
+        let model;
+        let activeBoxes = []; // Will store the latest predictions to share with the render loop
+
+        async function init() {
+            try {
+                model = await tf.loadGraphModel('./int8/model.json');
+                statusText.innerText = "Requesting webcam permissions...";
+                await setupCamera();
+                statusText.innerText = "Model loaded. Running inference...";
+                video.play();
+                
+                // Start both loops concurrently
+                renderLoop();      // 60 FPS Video rendering
+                inferenceLoop();   // Throttled AI Inference
+                
+            } catch (error) {
+                console.error(error);
+                statusText.innerText = "Error: " + error.message;
+            }
+        }
+
+        async function setupCamera() {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { width: 640, height: 480, facingMode: 'environment' },
+                audio: false
+            });
+            video.srcObject = stream;
+            return new Promise((resolve) => {
+                video.onloadedmetadata = () => {
+                    canvas.width = video.videoWidth || 640;
+                    canvas.height = video.videoHeight || 480;
+                    resolve(video);
+                };
+            });
+        }
+
+        // --- LOOP 1: RENDER VIDEO & BOXES ---
+        // Runs as fast as the browser allows (smooth video stream)
+        function renderLoop() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            activeBoxes.forEach(box => {
+                const maxCoord = Math.max(Math.abs(box.x1), Math.abs(box.y1), Math.abs(box.x2), Math.abs(box.y2));
+                const isNormalized = maxCoord <= 2.0;
+
+                const scaleX = isNormalized ? canvas.width : (canvas.width / MODEL_DIM);
+                const scaleY = isNormalized ? canvas.height : (canvas.height / MODEL_DIM);
+
+                let renderX, renderY, renderW, renderH;
+
+                const x1 = box.x1 * scaleX;
+                const y1 = box.y1 * scaleY;
+                const x2 = box.x2 * scaleX;
+                const y2 = box.y2 * scaleY;
+                
+                renderX = Math.min(x1, x2);
+                renderY = Math.min(y1, y2);
+                renderW = Math.abs(x2 - x1);
+                renderH = Math.abs(y2 - y1);
+
+                // Draw Box
+                const color = COLORS[box.classId] || "#FFFFFF";
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 4;
+                ctx.strokeRect(renderX, renderY, renderW, renderH);
+
+                // Draw Label
+                const label = `${CLASSES[box.classId]} ${(box.score * 100).toFixed(1)}%`;
+                ctx.fillStyle = color;
+                const textWidth = ctx.measureText(label).width;
+                ctx.fillRect(renderX, renderY - 25, textWidth + 10, 25);
+                ctx.fillStyle = "#000000";
+                ctx.font = "bold 16px sans-serif";
+                ctx.fillText(label, renderX + 5, renderY - 7);
+            });
+
+            requestAnimationFrame(renderLoop);
+        }
+
+        // --- LOOP 2: THROTTLED INFERENCE ---
+        // Executes, updates boxes, and then waits 500ms before doing it again
+        async function inferenceLoop() {
+            let inputTensor, predictions;
+
+            try {
+                // Grab frame, Normalize (/ 255.0)
+                inputTensor = tf.tidy(() => {
+                    let img = tf.browser.fromPixels(video).resizeBilinear([MODEL_DIM, MODEL_DIM]);
+                    img = img.div(255.0);
+                    return img.expandDims(0);
+                });
+
+                const start = performance.now();
+                let rawOutput = model.execute(inputTensor); 
+                predictions = Array.isArray(rawOutput) ? rawOutput[0] : rawOutput;
+                
+                const shape = predictions.shape;
+                const data = await predictions.data(); 
+                
+                let boxes = [];
+                let parsedFormat = "Unknown";
+
+                // Extract Coordinates
+                if (shape.length === 3 && shape[2] === 6) {
+                    parsedFormat = "End2End";
+                    for (let i = 0; i < shape[1]; i++) {
+                        const offset = i * 6;
+                        const score = data[offset + 4];
+                        if (score > CONFIDENCE_THRESHOLD) {
+                            boxes.push({
+                                x1: data[offset], y1: data[offset + 1],
+                                x2: data[offset + 2], y2: data[offset + 3],
+                                score: score, classId: Math.round(data[offset + 5])
+                            });
+                        }
+                    }
+                } 
+                else if (shape.length === 3 && shape[1] === (4 + CLASSES.length)) {
+                    parsedFormat = "Standard YOLO";
+                    const numAnchors = shape[2];
+                    for (let i = 0; i < numAnchors; i++) {
+                        let localMaxScore = 0;
+                        let classId = -1;
+                        for (let c = 0; c < CLASSES.length; c++) {
+                            const score = data[(4 + c) * numAnchors + i];
+                            if (score > localMaxScore) { localMaxScore = score; classId = c; }
+                        }
+                        if (localMaxScore > CONFIDENCE_THRESHOLD) {
+                            const cx = data[0 * numAnchors + i];
+                            const cy = data[1 * numAnchors + i];
+                            const w = data[2 * numAnchors + i];
+                            const h = data[3 * numAnchors + i];
+                            boxes.push({
+                                x1: cx - w/2, y1: cy - h/2,
+                                x2: cx + w/2, y2: cy + h/2,
+                                score: localMaxScore, classId: classId
+                            });
+                        }
+                    }
+                    if (boxes.length > 0) {
+                        const tfBoxes = tf.tensor2d(boxes.map(b => [b.y1, b.x1, b.y2, b.x2]));
+                        const tfScores = tf.tensor1d(boxes.map(b => b.score));
+                        const nmsIndices = await tf.image.nonMaxSuppressionAsync(tfBoxes, tfScores, 50, 0.45, CONFIDENCE_THRESHOLD);
+                        const indices = await nmsIndices.data();
+                        boxes = Array.from(indices).map(idx => boxes[idx]);
+                        tf.dispose([tfBoxes, tfScores, nmsIndices]);
+                    }
+                }
+
+                const end = performance.now();
+                diagText.innerText = `Shape: [${shape.join(', ')}] | Format: ${parsedFormat} | Exec Time: ${(end - start).toFixed(1)}ms`;
+                statusText.innerText = `Boxes Rendered: ${boxes.length}`;
+
+                if (boxes.length > 0) {
+                    let b = boxes[0];
+                    boxDiagText.innerText = `Raw Box 1: x1: ${b.x1.toFixed(2)}, y1: ${b.y1.toFixed(2)}, x2: ${b.x2.toFixed(2)}, y2: ${b.y2.toFixed(2)}`;
+                } else {
+                    boxDiagText.innerText = "Raw Box 1: None";
+                }
+
+                // Push new predictions to shared array
+                activeBoxes = boxes;
+
+            } catch (err) {
+                console.error("Inference Error:", err);
+            } finally {
+                // Safely clean up Tensors
+                if (inputTensor) inputTensor.dispose();
+                if (predictions) predictions.dispose();
+            }
+
+            // WAIT at least 500ms before doing the next frame inference 
+            // (saving CPU/GPU, but keeping the renderLoop completely buttery smooth)
+            setTimeout(inferenceLoop, 250);
+        }
+
+        init();
+    </script>
+</body>
+</html>

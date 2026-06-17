@@ -1,0 +1,9 @@
+{
+  "name": "yolo26-web-app",
+  "version": "1.0.0",
+  "description": "YOLOv26 INT8 TensorFlow.js Client",
+  "main": "server.js",
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
