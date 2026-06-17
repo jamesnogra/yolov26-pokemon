@@ -1,4 +1,5 @@
 # Pokemon Starter Plushie Object Detector
+![Alt text for your GIF](preview.gif)
 
 ## Packages Needed
  - Run the command `pip install ultralytics opencv-python`
