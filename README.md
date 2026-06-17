@@ -9,3 +9,6 @@
 ## Option 2: Running Using Browser
  - Run the command `node web/server.js `
  - Open in browser http://localhost:3000
+
+## Web Demo
+ - https://pokemon-starter.iamcebu.com/
