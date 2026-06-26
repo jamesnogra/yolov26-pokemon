@@ -14,6 +14,10 @@ app.get('/baybayin-n', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'baybayin-n.html'));
 });
 
+app.get('/baybayin-n-benchmark', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'baybayin-n-benchmark.html'));
+});
+
 app.listen(PORT, () => {
     console.log(`🚀 YOLOv26 Server running smoothly at http://localhost:${PORT}`);
 });
