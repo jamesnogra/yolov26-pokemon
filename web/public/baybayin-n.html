@@ -59,9 +59,14 @@
         ];
 
         // Dynamically generate a distinct color for each of the 59 classes using HSL
-        const COLORS = CLASSES.map((_, index) => {
+        /*const COLORS = CLASSES.map((_, index) => {
             const hue = Math.floor((index * 360) / CLASSES.length);
             return `hsl(${hue}, 80%, 50%)`;
+        });*/
+        // Use all white background
+        const COLORS = CLASSES.map((_, index) => {
+            const hue = Math.floor((index * 360) / CLASSES.length);
+            return `white`;
         });
 
         const video = document.getElementById('webcam');
@@ -143,13 +148,23 @@
                 ctx.strokeRect(renderX, renderY, renderW, renderH);
 
                 // Draw Label
-                const label = `${CLASSES[box.classId]} ${(box.score * 100).toFixed(1)}%`;
+                //const label = `${CLASSES[box.classId]} ${(box.score * 100).toFixed(1)}%`;
+                const label = `${CLASSES[box.classId]}`;
                 ctx.fillStyle = color;
-                const textWidth = ctx.measureText(label).width;
-                ctx.fillRect(renderX, renderY - 25, textWidth + 10, 25);
-                ctx.fillStyle = "#000000"; // Black text for better contrast against bright colors
-                ctx.font = "bold 16px sans-serif";
-                ctx.fillText(label, renderX + 5, renderY - 7);
+                // Set font size
+                ctx.font = "bold 14px sans-serif";
+                // Draw the background banner (matching the exact width of the box)
+                const labelHeight = 20;
+                ctx.fillRect(renderX, renderY - labelHeight, renderW, labelHeight);
+                // CENTER THE TEXT
+                ctx.fillStyle = "#000000"; // Black text
+                ctx.textAlign = "center";  // Align text relative to its X coordinate
+                // Calculate the horizontal midpoint of the bounding box
+                const centerX = renderX + (renderW / 2);
+                // Draw the text at the center point
+                ctx.fillText(label, centerX, renderY - 6);
+                // Reset alignment back to "left" so it doesn't break other text rendering later
+                ctx.textAlign = "left";
             });
 
             requestAnimationFrame(renderLoop);
