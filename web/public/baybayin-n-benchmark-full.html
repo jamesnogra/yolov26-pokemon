@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Baybayin FP32 Nano Benchmark</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
+	<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.9/dist/tf-tflite.min.js"></script>
+    <style>
+        body {
+            font-family: sans-serif;
+            background-color: #f4f4f9;
+            color: #333;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .status {
+            font-size: 1.2rem;
+            font-weight: bold;
+            padding: 10px;
+            background: #e2e8f0;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+
+        button {
+            padding: 10px 20px;
+            font-size: 1rem;
+            background-color: #2b6cb0;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+
+        button:disabled {
+            background-color: #cbd5e0;
+            cursor: not-allowed;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            background: white;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+        }
+
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        th {
+            background-color: #edf2f7;
+        }
+
+        /* Hidden image preloader style */
+        #preloader {
+            display: none;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Baybayin FP32 Nano Benchmark Dashboard</h1>
+    <div id="status" class="status">Loading TensorFlow.js and Model...</div>
+    <button id="run-btn" disabled onclick="runBenchmark()">Run Benchmark</button>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Image Source</th>
+                <th>Warmup Inference</th>
+                <th>Inference Time (ms)</th>
+                <th>Detections Found</th>
+            </tr>
+        </thead>
+        <tbody id="results-body">
+            </tbody>
+    </table>
+
+    <div id="preloader"></div>
+
+    <script>
+        const MODEL_DIM = 640;
+        const CONFIDENCE_THRESHOLD = 0.25;
+
+        const CLASSES = [
+            "a", "b", "ba", "be_bi", "bo_bu", "d", "da", "de_di", "do_du", "e_i",
+            "g", "ga", "ge_gi", "go_gu", "h", "ha", "he_hi", "ho_hu", "k", "ka",
+            "ke_ki", "ko_ku", "l", "la", "le_li", "lo_lu", "m", "ma", "me_mi", "mo_mu",
+            "n", "na", "ne_ni", "ng", "nga", "nge_ngi", "ngo_ngu", "no_nu", "o_u", "p",
+            "pa", "pe_pi", "po_pu", "s", "sa", "se_si", "so_su", "t", "ta", "te_ti",
+            "to_tu", "w", "wa", "we_wi", "wo_wu", "y", "ya", "ye_yi", "yo_yu"
+        ];
+
+        // Replace these URLs/paths with your 5 actual testing images
+        const IMAGE_SOURCES = [
+            "images/1.jpg",
+            "images/2.jpg",
+            "images/3.jpg",
+            "images/4.jpg",
+            "images/5.jpg"
+        ];
+
+        let model;
+        const statusDiv = document.getElementById("status");
+        const runBtn = document.getElementById("run-btn");
+        const resultsBody = document.getElementById("results-body");
+
+        async function init() {
+            try {
+                // 1. Load model
+                statusDiv.innerText = "Loading model components...";
+                model = await tflite.loadTFLiteModel('./best-nano-float32.tflite');
+
+                // 2. Eradicate cold start (Force shader compilation)
+                statusDiv.innerText = "Performing warm-up execution (Eliminating cold start)...";
+                await eliminateColdStart();
+
+                statusDiv.innerText = "Model ready for performance benchmarking.";
+                runBtn.disabled = false;
+
+                runBenchmark(false);
+            } catch (error) {
+                statusDiv.innerText = "Error loading application framework. Check console log.";
+                console.error(error);
+            }
+        }
+
+        async function eliminateColdStart() {
+            // Generate a zero-filled tensor matching your input dimensions to fire up the GPU backend
+            tf.tidy(() => {
+                const warmupTensor = tf.zeros([1, MODEL_DIM, MODEL_DIM, 3]);
+                const output = model.predict(warmupTensor);
+                // Dispose arrays explicitly if wrapped or split
+                if (Array.isArray(output)) output.forEach(t => t.dispose());
+            });
+            // Yield control back to browser to finalize DOM and backend tasks
+            await tf.nextFrame();
+        }
+
+        // Helper function to programmatically convert an image path into a DOM element
+        function loadImage(src) {
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                img.crossOrigin = "anonymous";
+                img.src = src;
+                img.onload = () => resolve(img);
+                img.onerror = (err) => reject(err);
+            });
+        }
+
+        async function runBenchmark(outputResults=true) {
+            runBtn.disabled = true;
+            resultsBody.innerHTML = ""; // Reset table content
+            statusDiv.innerText = "Benchmarking suite in execution...";
+
+            let totalTime = 0;
+
+            for (let i = 0; i < IMAGE_SOURCES.length; i++) {
+                const imgSrc = IMAGE_SOURCES[i];
+                statusDiv.innerText = `Processing image ${i + 1} of ${IMAGE_SOURCES.length}...`;
+
+                try {
+                    const imgElement = await loadImage(imgSrc);
+
+                    // Sync point for accurate performance timing
+                    await tf.nextFrame(); 
+
+                    const startTime = performance.now();
+                    const detectionCount = await runInference(imgElement);
+                    const endTime = performance.now();
+                    
+                    const inferenceTime = parseFloat((endTime - startTime).toFixed(2));
+                    totalTime += inferenceTime;
+
+                    if (outputResults) {
+                        appendResultRow(imgSrc, "No (Warmed Up)", `${inferenceTime} ms`, detectionCount);
+                    }
+                } catch (err) {
+                    console.error(`Failed to benchmark ${imgSrc}:`, err);
+                    appendResultRow(imgSrc, "N/A", "Failed to Load/Process", "0");
+                }
+            }
+
+            if (outputResults) {
+                const averageTime = (totalTime / IMAGE_SOURCES.length).toFixed(2);
+                statusDiv.innerText = `Benchmarking Finished! Average Inference Time: ${averageTime} ms`;
+            }
+            runBtn.disabled = false;
+        }
+
+        async function runInference(imgElement) {
+            let inputTensor, predictions;
+            let boxesFound = 0;
+
+            const results = tf.tidy(() => {
+                let img = tf.browser.fromPixels(imgElement).resizeBilinear([MODEL_DIM, MODEL_DIM]);
+                img = img.div(255.0);
+                return img.expandDims(0);
+            });
+
+            inputTensor = results;
+            let rawOutput = model.predict(inputTensor);
+            predictions = Array.isArray(rawOutput) ? rawOutput[0] : rawOutput;
+
+            const shape = predictions.shape;
+            const data = await predictions.data();
+
+            let boxes = [];
+
+            // Anchor verification pipeline structure matching your original webcam layout
+            if (shape.length === 3 && shape[2] === 6) {
+                for (let i = 0; i < shape[1]; i++) {
+                    const offset = i * 6;
+                    const score = data[offset + 4];
+                    if (score > CONFIDENCE_THRESHOLD) {
+                        boxes.push({ score });
+                    }
+                }
+                boxesFound = boxes.length;
+            } 
+            else if (shape.length === 3 && shape[1] === (4 + CLASSES.length)) {
+                const numAnchors = shape[2];
+                for (let i = 0; i < numAnchors; i++) {
+                    let localMaxScore = 0;
+                    for (let c = 0; c < CLASSES.length; c++) {
+                        const score = data[(4 + c) * numAnchors + i];
+                        if (score > localMaxScore) { localMaxScore = score; }
+                    }
+                    if (localMaxScore > CONFIDENCE_THRESHOLD) {
+                        boxes.push({ score: localMaxScore });
+                    }
+                }
+                boxesFound = boxes.length;
+                
+                // Mirroring clean-up logic structure to simulate true pipeline overhead
+                if (boxesFound > 0) {
+                    const dummyBoxes = tf.zeros([boxesFound, 4]);
+                    const dummyScores = tf.ones([boxesFound]);
+                    const nmsIndices = await tf.image.nonMaxSuppressionAsync(dummyBoxes, dummyScores, 50, 0.45, CONFIDENCE_THRESHOLD);
+                    tf.dispose([dummyBoxes, dummyScores, nmsIndices]);
+                }
+            }
+
+            if (inputTensor) inputTensor.dispose();
+            if (predictions) predictions.dispose();
+
+            return boxesFound;
+        }
+
+        function appendResultRow(src, warmup, time, boxes) {
+            const row = document.createElement("tr");
+            row.innerHTML = `
+                <td><strong>${src}</strong></td>
+                <td>${warmup}</td>
+                <td style="color: #2b6cb0; font-weight: bold;">${time}</td>
+                <td>${boxes}</td>
+            `;
+            resultsBody.appendChild(row);
+        }
+
+        // Run framework loader automatically on page initialization
+        init();
+    </script>
+</body>
+
+</html>

@@ -18,6 +18,18 @@ app.get('/baybayin-n-benchmark', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'baybayin-n-benchmark.html'));
 });
 
+app.get('/baybayin-n-benchmark-full', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'baybayin-n-benchmark-full.html'));
+});
+
+app.get('/baybayin-s-benchmark', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'baybayin-s-benchmark.html'));
+});
+
+app.get('/baybayin-s-benchmark-full', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'baybayin-s-benchmark-full.html'));
+});
+
 app.listen(PORT, () => {
     console.log(`🚀 YOLOv26 Server running smoothly at http://localhost:${PORT}`);
 });
