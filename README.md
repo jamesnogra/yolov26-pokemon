@@ -13,3 +13,6 @@
 
 ## Web Demo
  - https://pokemon-starter.iamcebu.com/
+
+## Restart Service
+ - Run the command `sudo systemctl restart pokemon-starter.service`
