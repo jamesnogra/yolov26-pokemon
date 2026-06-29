@@ -1,7 +1,7 @@
 description: Ultralytics custom-structure model trained on /kaggle/working/data.yaml
 author: Ultralytics
-date: '2026-06-28T15:22:21.699068'
-version: 8.4.81
+date: '2026-06-29T04:03:28.029330'
+version: 8.4.82
 license: AGPL-3.0 License (https://ultralytics.com/license)
 docs: https://docs.ultralytics.com
 stride: 32

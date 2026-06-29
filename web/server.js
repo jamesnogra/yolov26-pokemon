@@ -10,6 +10,10 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+app.get('/baybayin-live', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'baybayin-live.html'));
+});
+
 app.get('/baybayin-n', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'baybayin-n.html'));
 });
