@@ -3,52 +3,129 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Baybayin INT8 Inference (nano ½)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Baybayin Translator</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
     <style>
-        .video-container {
-            position: relative;
-            display: inline-block;
-            width: 100%;
-            max-width: 640px;
-            aspect-ratio: 1 / 1;
-            /* Forces the container to be a perfect square */
-            background-color: #000;
-            /* Optional: adds a black background while loading */
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
         }
 
-        canvas {
+        body {
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            width: 100vw;
+            height: 100vh;
+            height: 100dvh; /* Dynamic viewport height for mobile browsers */
+            overflow: hidden;
+            background-color: #000;
+        }
+
+        /* Fullscreen Camera Container */
+        .video-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            height: 100dvh;
+            overflow: hidden;
+        }
+
+        /* Both video and canvas fill the screen and crop identically */
+        video, canvas {
             position: absolute;
             top: 0;
             left: 0;
             width: 100%;
             height: 100%;
+            object-fit: cover;
         }
 
-        video {
-            display: block;
+        /* Title banner floating on top */
+        .title-overlay {
+            position: absolute;
+            top: 16px;
+            left: 0;
             width: 100%;
-            height: 100%;
-            object-fit: cover;
-            /* Ensures the video fills the square container */
+            text-align: center;
+            z-index: 10;
+            pointer-events: none;
+        }
+
+        .title-overlay h1 {
+            display: inline-block;
+            color: #ffffff;
+            font-size: 15px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            background: rgba(0, 0, 0, 0.45);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            padding: 6px 18px;
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+        }
+
+        /* Floating Output Card at the bottom */
+        .output-container {
+            position: absolute;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: calc(100% - 32px);
+            max-width: 520px;
+            padding: 16px 20px;
+            background: rgba(18, 18, 18, 0.75);
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+            z-index: 10;
+        }
+
+        .output-label {
+            font-size: 11px;
+            font-weight: 700;
+            color: rgba(255, 255, 255, 0.6);
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .output-text {
+            font-size: 24px;
+            font-weight: 600;
+            color: #ffffff;
+            word-break: break-word;
+            min-height: 32px;
         }
     </style>
 </head>
 
 <body>
-    <h1>Baybayin INT8 Inference (nano ½)</h1>
-
     <div class="video-container">
+        <!-- Live Video & Bounding Box Canvas -->
         <video id="webcam" autoplay playsinline muted></video>
         <canvas id="output-canvas"></canvas>
+
+        <!-- Top Title Overlay -->
+        <div class="title-overlay">
+            <h1>Baybayin Translator</h1>
+        </div>
+
+        <!-- Bottom Floating Output Container -->
+        <div class="output-container">
+            <div class="output-label">Detected Output</div>
+            <div id="output-text" class="output-text">—</div>
+        </div>
     </div>
 
     <script>
         const MODEL_DIM = 640;
         const CONFIDENCE_THRESHOLD = 0.25;
 
-        // Updated to your 59 Baybayin classes
+        // 59 Baybayin classes
         const CLASSES = [
             "a", "b", "ba", "be_bi", "bo_bu", "d", "da", "de_di", "do_du", "e_i",
             "g", "ga", "ge_gi", "go_gu", "h", "ha", "he_hi", "ho_hu", "k", "ka",
@@ -58,23 +135,15 @@
             "to_tu", "w", "wa", "we_wi", "wo_wu", "y", "ya", "ye_yi", "yo_yu"
         ];
 
-        // Dynamically generate a distinct color for each of the 59 classes using HSL
-        /*const COLORS = CLASSES.map((_, index) => {
-            const hue = Math.floor((index * 360) / CLASSES.length);
-            return `hsl(${hue}, 80%, 50%)`;
-        });*/
-        // Use all white background
-        const COLORS = CLASSES.map((_, index) => {
-            const hue = Math.floor((index * 360) / CLASSES.length);
-            return `white`;
-        });
+        const COLORS = CLASSES.map(() => `white`);
 
         const video = document.getElementById('webcam');
         const canvas = document.getElementById('output-canvas');
+        const outputText = document.getElementById('output-text');
         const ctx = canvas.getContext('2d');
 
         let model;
-        let activeBoxes = []; // Will store the latest predictions to share with the render loop
+        let activeBoxes = [];
 
         async function init() {
             try {
@@ -82,10 +151,8 @@
                 await setupCamera();
                 video.play();
 
-                // Start both loops concurrently
                 renderLoop();      // 60 FPS Video rendering
                 inferenceLoop();   // Throttled AI Inference
-
             } catch (error) {
                 console.error("Error initializing:", error);
             }
@@ -94,9 +161,8 @@
         async function setupCamera() {
             const stream = await navigator.mediaDevices.getUserMedia({
                 video: {
-                    width: { ideal: 640 },
-                    height: { ideal: 640 },
-                    aspectRatio: { ideal: 1 }, // Instructs the browser to provide a 1:1 square feed
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 },
                     facingMode: 'environment'
                 },
                 audio: false
@@ -106,7 +172,7 @@
 
             return new Promise((resolve) => {
                 video.onloadedmetadata = () => {
-                    // Update the fallback height from 480 to 640
+                    // Match canvas internal resolution to video stream
                     canvas.width = video.videoWidth || 640;
                     canvas.height = video.videoHeight || 640;
                     resolve(video);
@@ -114,13 +180,58 @@
             });
         }
 
+        // --- SORTING FUNCTION (READING ORDER) ---
+        function sortBoxesInReadingOrder(boxes) {
+            if (!boxes || boxes.length === 0) return [];
+
+            const annotated = boxes.map(b => ({
+                ...b,
+                cx: (b.x1 + b.x2) / 2,
+                cy: (b.y1 + b.y2) / 2,
+                h: Math.abs(b.y2 - b.y1),
+                w: Math.abs(b.x2 - b.x1)
+            }));
+
+            // Sort vertically first
+            annotated.sort((a, b) => a.cy - b.cy);
+
+            // Cluster into lines based on vertical proximity
+            const lines = [];
+            annotated.forEach(box => {
+                const matchingLine = lines.find(line => {
+                    const avgY = line.reduce((acc, curr) => acc + curr.cy, 0) / line.length;
+                    const avgH = line.reduce((acc, curr) => acc + curr.h, 0) / line.length;
+                    return Math.abs(box.cy - avgY) < avgH * 0.5;
+                });
+
+                if (matchingLine) {
+                    matchingLine.push(box);
+                } else {
+                    lines.push([box]);
+                }
+            });
+
+            // Sort each line left-to-right
+            lines.forEach(line => line.sort((a, b) => a.cx - b.cx));
+
+            return lines.flat();
+        }
+
+        // Update the detected text
+        function updateOutputText(boxes) {
+            if (!boxes || boxes.length === 0) {
+                outputText.innerText = "—";
+                return;
+            }
+
+            const sorted = sortBoxesInReadingOrder(boxes);
+            const text = sorted.map(b => CLASSES[b.classId]).join(' ');
+            outputText.innerText = text;
+        }
+
         // --- RENDER VIDEO & BOXES ---
-        // Runs as fast as the browser allows (smooth video stream)
         function renderLoop() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
-            // We no longer draw video on canvas if video element is visible underneath.
-            // If you hide the video element, uncomment the line below.
-            // ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
             activeBoxes.forEach(box => {
                 const maxCoord = Math.max(Math.abs(box.x1), Math.abs(box.y1), Math.abs(box.x2), Math.abs(box.y2));
@@ -129,17 +240,15 @@
                 const scaleX = isNormalized ? canvas.width : (canvas.width / MODEL_DIM);
                 const scaleY = isNormalized ? canvas.height : (canvas.height / MODEL_DIM);
 
-                let renderX, renderY, renderW, renderH;
-
                 const x1 = box.x1 * scaleX;
                 const y1 = box.y1 * scaleY;
                 const x2 = box.x2 * scaleX;
                 const y2 = box.y2 * scaleY;
 
-                renderX = Math.min(x1, x2);
-                renderY = Math.min(y1, y2);
-                renderW = Math.abs(x2 - x1);
-                renderH = Math.abs(y2 - y1);
+                const renderX = Math.min(x1, x2);
+                const renderY = Math.min(y1, y2);
+                const renderW = Math.abs(x2 - x1);
+                const renderH = Math.abs(y2 - y1);
 
                 // Draw Box
                 const color = COLORS[box.classId] || "#FFFFFF";
@@ -148,22 +257,15 @@
                 ctx.strokeRect(renderX, renderY, renderW, renderH);
 
                 // Draw Label
-                //const label = `${CLASSES[box.classId]} ${(box.score * 100).toFixed(1)}%`;
                 const label = `${CLASSES[box.classId]}`;
                 ctx.fillStyle = color;
-                // Set font size
                 ctx.font = "bold 14px sans-serif";
-                // Draw the background banner (matching the exact width of the box)
                 const labelHeight = 20;
                 ctx.fillRect(renderX, renderY - labelHeight, renderW, labelHeight);
-                // CENTER THE TEXT
-                ctx.fillStyle = "#000000"; // Black text
-                ctx.textAlign = "center";  // Align text relative to its X coordinate
-                // Calculate the horizontal midpoint of the bounding box
+                ctx.fillStyle = "#000000";
+                ctx.textAlign = "center";
                 const centerX = renderX + (renderW / 2);
-                // Draw the text at the center point
                 ctx.fillText(label, centerX, renderY - 6);
-                // Reset alignment back to "left" so it doesn't break other text rendering later
                 ctx.textAlign = "left";
             });
 
@@ -171,12 +273,10 @@
         }
 
         // --- THROTTLED INFERENCE ---
-        // Executes, updates boxes, and then waits 250ms before doing it again
         async function inferenceLoop() {
             let inputTensor, predictions;
 
             try {
-                // Grab frame, Normalize (/ 255.0)
                 inputTensor = tf.tidy(() => {
                     let img = tf.browser.fromPixels(video).resizeBilinear([MODEL_DIM, MODEL_DIM]);
                     img = img.div(255.0);
@@ -191,7 +291,6 @@
 
                 let boxes = [];
 
-                // Extract Coordinates
                 if (shape.length === 3 && shape[2] === 6) {
                     for (let i = 0; i < shape[1]; i++) {
                         const offset = i * 6;
@@ -205,13 +304,11 @@
                         }
                     }
                 }
-                // STANDARD YOLO OUTPUT (Coordinates + 59 Classes)
                 else if (shape.length === 3 && shape[1] === (4 + CLASSES.length)) {
                     const numAnchors = shape[2];
                     for (let i = 0; i < numAnchors; i++) {
                         let localMaxScore = 0;
                         let classId = -1;
-                        // Dynamically loop over all 59 classes based on CLASSES.length
                         for (let c = 0; c < CLASSES.length; c++) {
                             const score = data[(4 + c) * numAnchors + i];
                             if (score > localMaxScore) { localMaxScore = score; classId = c; }
@@ -238,18 +335,16 @@
                     }
                 }
 
-                // Push new predictions to shared array
                 activeBoxes = boxes;
+                updateOutputText(boxes);
 
             } catch (err) {
                 console.error("Inference Error:", err);
             } finally {
-                // Safely clean up Tensors
                 if (inputTensor) inputTensor.dispose();
                 if (predictions) predictions.dispose();
             }
 
-            // WAIT at least 250ms before doing the next frame inference 
             setTimeout(inferenceLoop, 250);
         }
 
