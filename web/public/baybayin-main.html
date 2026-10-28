@@ -5,10 +5,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Baybayin Translator</title>
-    <!-- Base TensorFlow.js -->
+
+    <!-- Dependencies matched to your working benchmark page -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
-    <!-- TFLite WebAssembly runtime -->
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.10/dist/tf-tflite.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.9/dist/tf-tflite.min.js"></script>
 
     <style>
         * {
@@ -26,6 +26,7 @@
             background-color: #000;
         }
 
+        /* Fullscreen Camera Container */
         .video-container {
             position: relative;
             width: 100vw;
@@ -34,6 +35,7 @@
             overflow: hidden;
         }
 
+        /* Video & Canvas fill and crop identically */
         video, canvas {
             position: absolute;
             top: 0;
@@ -43,6 +45,7 @@
             object-fit: cover;
         }
 
+        /* Floating Title Banner */
         .title-overlay {
             position: absolute;
             top: 16px;
@@ -67,6 +70,7 @@
             border: 1px solid rgba(255, 255, 255, 0.15);
         }
 
+        /* Floating Output Card */
         .output-container {
             position: absolute;
             bottom: 24px;
@@ -105,16 +109,19 @@
 
 <body>
     <div class="video-container">
+        <!-- Live Video & Bounding Box Canvas -->
         <video id="webcam" autoplay playsinline muted></video>
         <canvas id="output-canvas"></canvas>
 
+        <!-- Top Title Overlay -->
         <div class="title-overlay">
             <h1>Baybayin Translator</h1>
         </div>
 
+        <!-- Bottom Floating Output Container -->
         <div class="output-container">
             <div class="output-label">Detected Output</div>
-            <div id="output-text" class="output-text">—</div>
+            <div id="output-text" class="output-text">Loading Model...</div>
         </div>
     </div>
 
@@ -122,6 +129,7 @@
         const MODEL_DIM = 640;
         const CONFIDENCE_THRESHOLD = 0.25;
 
+        // 59 Baybayin classes
         const CLASSES = [
             "a", "b", "ba", "be_bi", "bo_bu", "d", "da", "de_di", "do_du", "e_i",
             "g", "ga", "ge_gi", "go_gu", "h", "ha", "he_hi", "ho_hu", "k", "ka",
@@ -143,21 +151,37 @@
 
         async function init() {
             try {
-                // 1. Point to the remote CDN hosting WASM dependencies
-                tflite.setWasmPath('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.10/dist/');
+                outputText.innerText = "Loading model file...";
 
-                // 2. Load the .tflite file directly
-                model = await tflite.loadTFLiteModel('./baybayin-main/best_int8.tflite');
-                console.log("TFLite Model loaded successfully");
+                const MODEL_PATH = './model_fixed.tflite';
+                const response = await fetch(MODEL_PATH);
+                const modelBuffer = await response.arrayBuffer();
+                model = await tflite.loadTFLiteModel(modelBuffer);
 
+                // 3. Warm-up to compile shaders
+                outputText.innerText = "Warming up...";
+                await eliminateColdStart();
+
+                outputText.innerText = "—";
                 await setupCamera();
                 video.play();
 
                 renderLoop();
                 inferenceLoop();
             } catch (error) {
-                console.error("Error initializing:", error);
+                outputText.innerText = "Error loading model";
+                console.error("Initialization Error:", error);
             }
+        }
+
+        // Warm-up execution with NCHW shape [1, 3, 640, 640]
+        async function eliminateColdStart() {
+            tf.tidy(() => {
+                const warmupTensor = tf.zeros([1, 3, MODEL_DIM, MODEL_DIM]);
+                const output = model.predict(warmupTensor);
+                if (Array.isArray(output)) output.forEach(t => t.dispose());
+            });
+            await tf.nextFrame();
         }
 
         async function setupCamera() {
@@ -220,7 +244,8 @@
             }
 
             const sorted = sortBoxesInReadingOrder(boxes);
-            outputText.innerText = sorted.map(b => CLASSES[b.classId]).join(' ');
+            const text = sorted.map(b => CLASSES[b.classId]).join(' ');
+            outputText.innerText = text;
         }
 
         function renderLoop() {
@@ -267,39 +292,40 @@
             let inputTensor, predictions;
 
             try {
+                // Preprocessing: Resize, Normalize, and Transpose to NCHW [1, 3, 640, 640]
                 inputTensor = tf.tidy(() => {
                     let img = tf.browser.fromPixels(video).resizeBilinear([MODEL_DIM, MODEL_DIM]);
-                    
-                    // NOTE: If your .tflite is full INT8/UINT8 quantized, comment out .div(255.0) and use .toInt() instead:
-                    img = img.div(255.0); // Standard float32 normalization
-                    
-                    return img.expandDims(0);
+                    img = img.div(255.0);
+                    img = img.expandDims(0);
+                    return img.transpose([0, 3, 1, 2]); // Convert to [1, 3, 640, 640]
                 });
 
-                // 3. TFLite model execution: use .predict() instead of .execute()
                 let rawOutput = model.predict(inputTensor);
-                predictions = Array.isArray(rawOutput) ? rawOutput[0] : (rawOutput instanceof tf.Tensor ? rawOutput : Object.values(rawOutput)[0]);
+                predictions = Array.isArray(rawOutput) ? rawOutput[0] : rawOutput;
 
                 const shape = predictions.shape;
                 const data = await predictions.data();
 
                 let boxes = [];
 
-                // Format A: [1, num_boxes, 6] (Already NMS-filtered output)
+                // Pipeline A: Pre-processed [1, num_boxes, 6]
                 if (shape.length === 3 && shape[2] === 6) {
                     for (let i = 0; i < shape[1]; i++) {
                         const offset = i * 6;
                         const score = data[offset + 4];
                         if (score > CONFIDENCE_THRESHOLD) {
                             boxes.push({
-                                x1: data[offset], y1: data[offset + 1],
-                                x2: data[offset + 2], y2: data[offset + 3],
-                                score: score, classId: Math.round(data[offset + 5])
+                                x1: data[offset],
+                                y1: data[offset + 1],
+                                x2: data[offset + 2],
+                                y2: data[offset + 3],
+                                score: score,
+                                classId: Math.round(data[offset + 5])
                             });
                         }
                     }
                 }
-                // Format B: [1, 4 + classes, anchors] (Standard raw YOLOv8 output)
+                // Pipeline B: Raw YOLOv8 [1, 4 + classes, anchors] (e.g., [1, 63, 8400])
                 else if (shape.length === 3 && shape[1] === (4 + CLASSES.length)) {
                     const numAnchors = shape[2];
                     for (let i = 0; i < numAnchors; i++) {
@@ -307,7 +333,10 @@
                         let classId = -1;
                         for (let c = 0; c < CLASSES.length; c++) {
                             const score = data[(4 + c) * numAnchors + i];
-                            if (score > localMaxScore) { localMaxScore = score; classId = c; }
+                            if (score > localMaxScore) {
+                                localMaxScore = score;
+                                classId = c;
+                            }
                         }
                         if (localMaxScore > CONFIDENCE_THRESHOLD) {
                             const cx = data[0 * numAnchors + i];
@@ -315,20 +344,56 @@
                             const w = data[2 * numAnchors + i];
                             const h = data[3 * numAnchors + i];
                             boxes.push({
-                                x1: cx - w / 2, y1: cy - h / 2,
-                                x2: cx + w / 2, y2: cy + h / 2,
-                                score: localMaxScore, classId: classId
+                                x1: cx - w / 2,
+                                y1: cy - h / 2,
+                                x2: cx + w / 2,
+                                y2: cy + h / 2,
+                                score: localMaxScore,
+                                classId: classId
                             });
                         }
                     }
-                    if (boxes.length > 0) {
-                        const tfBoxes = tf.tensor2d(boxes.map(b => [b.y1, b.x1, b.y2, b.x2]));
-                        const tfScores = tf.tensor1d(boxes.map(b => b.score));
-                        const nmsIndices = await tf.image.nonMaxSuppressionAsync(tfBoxes, tfScores, 50, 0.45, CONFIDENCE_THRESHOLD);
-                        const indices = await nmsIndices.data();
-                        boxes = Array.from(indices).map(idx => boxes[idx]);
-                        tf.dispose([tfBoxes, tfScores, nmsIndices]);
+                }
+                // Pipeline C: Transposed Raw YOLOv8 [1, anchors, 4 + classes] (e.g., [1, 8400, 63])
+                else if (shape.length === 3 && shape[2] === (4 + CLASSES.length)) {
+                    const numAnchors = shape[1];
+                    const numFeatures = shape[2];
+                    for (let i = 0; i < numAnchors; i++) {
+                        const rowOffset = i * numFeatures;
+                        let localMaxScore = 0;
+                        let classId = -1;
+                        for (let c = 0; c < CLASSES.length; c++) {
+                            const score = data[rowOffset + 4 + c];
+                            if (score > localMaxScore) {
+                                localMaxScore = score;
+                                classId = c;
+                            }
+                        }
+                        if (localMaxScore > CONFIDENCE_THRESHOLD) {
+                            const cx = data[rowOffset + 0];
+                            const cy = data[rowOffset + 1];
+                            const w = data[rowOffset + 2];
+                            const h = data[rowOffset + 3];
+                            boxes.push({
+                                x1: cx - w / 2,
+                                y1: cy - h / 2,
+                                x2: cx + w / 2,
+                                y2: cy + h / 2,
+                                score: localMaxScore,
+                                classId: classId
+                            });
+                        }
                     }
+                }
+
+                // Apply NMS if raw anchor predictions were parsed
+                if (boxes.length > 0 && shape[2] !== 6) {
+                    const tfBoxes = tf.tensor2d(boxes.map(b => [b.y1, b.x1, b.y2, b.x2]));
+                    const tfScores = tf.tensor1d(boxes.map(b => b.score));
+                    const nmsIndices = await tf.image.nonMaxSuppressionAsync(tfBoxes, tfScores, 50, 0.45, CONFIDENCE_THRESHOLD);
+                    const indices = await nmsIndices.data();
+                    boxes = Array.from(indices).map(idx => boxes[idx]);
+                    tf.dispose([tfBoxes, tfScores, nmsIndices]);
                 }
 
                 activeBoxes = boxes;
@@ -341,7 +406,7 @@
                 if (predictions && typeof predictions.dispose === 'function') predictions.dispose();
             }
 
-            setTimeout(inferenceLoop, 250);
+            setTimeout(inferenceLoop, 100);
         }
 
         init();
